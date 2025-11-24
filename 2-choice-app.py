@@ -19,7 +19,7 @@ def load_data():
         ingredient_df = pd.read_csv('ingredient.csv')
         
         # 고령자 데이터는 상단 4줄이 헤더가 아니므로 skiprows=4 옵션 사용
-        patient_df = pd.read_csv('고령자 건강 데이터 양식_서울굿케어힐링센터20251030_수정 (2) 복사본 2.csv', header=4)
+        patient_df = pd.read_csv('senior.csv', header=4)
         
         # 데이터 전처리
         menu_df.fillna(0, inplace=True)
