@@ -111,24 +111,35 @@ def validate_nutrition(generated_menu, nutrient_df):
     total_stats = {'에너지(kcal)': 0, '나트륨(mg)': 0, '단백질(g)': 0}
     validated_details = []
     
-    for cat, menu_name in generated_menu.items():
-        clean_name = menu_name.split('(')[0].strip()
-        row = nutrient_df[nutrient_df['Menu'] == clean_name]
-        
-        if not row.empty:
-            kcal = row['에너지(kcal)'].values[0]
-            na = row['나트륨(mg)'].values[0]
-            prot = row['단백질(g)'].values[0]
-            
-            total_stats['에너지(kcal)'] += kcal
-            total_stats['나트륨(mg)'] += na
-            total_stats['단백질(g)'] += prot
-            validated_details.append({'구분': cat, '메뉴': menu_name, 'Kcal': kcal, 'Na': na})
+    for cat, menu_data in generated_menu.items():
+        # 1. AI가 메뉴를 리스트로 줬을 경우와 문자열로 줬을 경우를 모두 처리
+        if isinstance(menu_data, list):
+            items = menu_data
         else:
-            validated_details.append({'구분': cat, '메뉴': menu_name, 'Kcal': 0, 'Na': 0})
+            items = [str(menu_data)]
+            
+        # 2. 각 메뉴 아이템별로 영양소 계산
+        for menu_name in items:
+            # 조리법 괄호 제거 (예: "멸치볶음(갈아서)" -> "멸치볶음")
+            clean_name = menu_name.split('(')[0].strip()
+            
+            row = nutrient_df[nutrient_df['Menu'] == clean_name]
+            
+            if not row.empty:
+                kcal = row['에너지(kcal)'].values[0]
+                na = row['나트륨(mg)'].values[0]
+                prot = row['단백질(g)'].values[0]
+                
+                total_stats['에너지(kcal)'] += kcal
+                total_stats['나트륨(mg)'] += na
+                total_stats['단백질(g)'] += prot
+                
+                validated_details.append({'구분': cat, '메뉴': menu_name, 'Kcal': kcal, 'Na': na})
+            else:
+                # DB에 없는 메뉴이거나, 단순 텍스트인 경우
+                validated_details.append({'구분': cat, '메뉴': menu_name, 'Kcal': 0, 'Na': 0})
             
     return total_stats, pd.DataFrame(validated_details)
-
 # -------------------------------------------------------------------------
 # 4. 메인 UI
 # -------------------------------------------------------------------------
