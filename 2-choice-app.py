@@ -1,215 +1,216 @@
 import streamlit as st
 import pandas as pd
-import openai
-import json
 import random
+import datetime
 
 # -------------------------------------------------------------------------
-# 1. 데이터 로드
+# 1. 데이터 로드 및 전처리
 # -------------------------------------------------------------------------
 @st.cache_data
 def load_data():
     try:
-        # 파일 로드
         menu_df = pd.read_csv('menu.csv')
-        nutrient_df = pd.read_csv('nutrient.csv')
         category_df = pd.read_csv('category.csv')
-        ingredient_df = pd.read_csv('ingredient.csv')
         
-        # 고령자 데이터 로드 (헤더 자동 찾기)
+        # 고령자 데이터 헤더 자동 찾기
         patient_file = 'senior.csv'
         patient_df = pd.read_csv(patient_file, header=3)
         patient_df.columns = patient_df.columns.str.strip()
 
-        return menu_df, nutrient_df, category_df, ingredient_df, patient_df
+        menu_df.fillna(0, inplace=True)
+        return menu_df, category_df, patient_df
     except Exception as e:
-        st.error(f"데이터 로드 중 오류: {e}")
-        return None, None, None, None, None
+        st.error(f"데이터 로드 오류: {e}")
+        return None, None, None
 
 # -------------------------------------------------------------------------
-# 2. [핵심] LLM 식단 설계 에이전트
+# 2. 부찬 속성 분류기 (육고기/해산물/채소)
 # -------------------------------------------------------------------------
-def generate_meal_plan_by_llm(api_key, patient_info, inventory_list, candidate_menus):
+def classify_side_dishes(category_df):
     """
-    LLM에게 '환자정보 + 재고 + 후보메뉴'를 주고 식단을 직접 짜오게 시키는 함수
+    모든 '부찬'을 재료 특성에 따라 분류합니다.
+    실제 서비스에서는 이 부분을 LLM에게 맡기면 훨씬 정확합니다.
+    여기서는 빠른 데모를 위해 키워드 기반으로 분류합니다.
     """
-    if not api_key:
-        return None
-
-    client = openai.OpenAI(api_key=api_key)
-
-    # 1. 프롬프트 데이터 준비
-    # 너무 많은 데이터를 보내면 토큰이 터지므로, 카테고리별로 후보를 추려서 보냅니다.
-    candidates_str = ""
-    for cat, menus in candidate_menus.items():
-        # 카테고리별 랜덤 10개씩만 후보로 줘서 선택하게 함 (실제론 DB 필터링 후 전달)
-        sample = random.sample(menus, min(len(menus), 15)) 
-        candidates_str += f"- {cat}: {', '.join(sample)}\n"
-
-    # 2. 시스템 프롬프트 (AI의 역할 정의)
-    system_role = """
-    당신은 요양원 수석 영양사입니다. 
-    제공된 [환자 정보]와 [보유 재고]를 고려하여, [후보 메뉴 리스트] 중에서 가장 적합한 1끼 식단을 구성하세요.
+    side_dishes = category_df[category_df['Category'] == '부찬']['Menu'].unique()
     
-    [필수 규칙]
-    1. 구성: 밥, 국, 주찬, 부찬, 김치 (총 5가지)
-    2. 환자의 질환(당뇨, 고혈압)과 연하장애(씹는 능력)를 최우선으로 고려할 것.
-    3. 가능한 [보유 재고]에 포함된 재료를 사용하는 메뉴를 우선 선택할 것.
-    4. 선택한 메뉴가 환자에게 부적합할 경우(예: 연하장애인데 딱딱한 반찬), 메뉴 이름 뒤에 조리법 수정사항을 괄호로 적을 것. (예: 멸치볶음(갈아서 제공))
-    
-    [출력 형식]
-    반드시 아래 JSON 형식으로만 답변하세요. 다른 말은 하지 마세요.
-    {
-        "reasoning": "왜 이 식단을 짰는지에 대한 3줄 요약 설명",
-        "menu": {
-            "밥": "메뉴명",
-            "국": "메뉴명",
-            "주찬": "메뉴명",
-            "부찬": "메뉴명",
-            "김치": "메뉴명"
-        }
+    classified_db = {
+        '육고기': [],
+        '해산물': [],
+        '채소': []
     }
-    """
-
-    # 3. 유저 프롬프트 (이번 건)
-    user_prompt = f"""
-    [환자 정보]
-    - 나이/성별: {patient_info['나이']}세 / {patient_info['성별']}
-    - 질환: 당뇨({patient_info.get('당뇨병')}), 고혈압({patient_info.get('고혈압')})
-    - 연하장애: {patient_info.get('연하장애', '없음')}
-    - 현재 식사 형태: {patient_info['현재식사현황']}
-
-    [보유 재고 (많음)]
-    {', '.join(inventory_list)}
-
-    [후보 메뉴 리스트 (이 중에서 골라)]
-    {candidates_str}
-    """
-
-    # 4. LLM 호출
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o", # gpt-3.5-turbo보다 gpt-4o가 JSON을 훨씬 잘 짭니다.
-            messages=[
-                {"role": "system", "content": system_role},
-                {"role": "user", "content": user_prompt}
-            ],
-            response_format={"type": "json_object"}, # 강제로 JSON만 뱉게 설정
-            temperature=0.7
-        )
-        return json.loads(response.choices[0].message.content)
-    except Exception as e:
-        st.error(f"LLM 호출 에러: {e}")
-        return None
+    
+    # 키워드 사전
+    meat_keywords = ['소고기', '돈육', '돼지', '햄', '베이컨', '소세지', '장조림', '닭', '미트볼', '계란', '메추리알']
+    sea_keywords = ['멸치', '어묵', '김', '미역', '새우', '오징어', '참치', '명태', '코다리', '굴']
+    # 나머지는 채소로 간주
+    
+    for menu in side_dishes:
+        is_classified = False
+        
+        # 육류 체크
+        for k in meat_keywords:
+            if k in menu:
+                classified_db['육고기'].append(menu)
+                is_classified = True
+                break
+        
+        # 해산물 체크 (육류가 아니면)
+        if not is_classified:
+            for k in sea_keywords:
+                if k in menu:
+                    classified_db['해산물'].append(menu)
+                    is_classified = True
+                    break
+        
+        # 둘 다 아니면 채소
+        if not is_classified:
+            classified_db['채소'].append(menu)
+            
+    return classified_db
 
 # -------------------------------------------------------------------------
-# 3. 메인 UI
+# 3. 한 달치 식단 생성 엔진
 # -------------------------------------------------------------------------
-def main():
-    st.set_page_config(layout="wide", page_title="AI 주도형 식단 설계")
-    st.title("🧠 LLM 주도형 요양원 식단 생성기")
-    st.markdown("규칙이 아닌, **AI의 판단**으로 환자 상태와 재고에 맞춰 식단을 짭니다.")
-
-    # 1. 설정 및 데이터
-    with st.sidebar:
-        api_key = st.text_input("OpenAI API Key", type="password")
-        if not api_key: st.warning("키를 입력해야 AI가 작동합니다.")
-        menu_df, nutrient_df, category_df, ingredient_df, patient_df = load_data()
-
-    if menu_df is None: return
-
-    # 2. 화면 구성
-    col1, col2 = st.columns([1, 2])
-
-    with col1:
-        st.subheader("1. 대상 선택")
-        selected_patient = st.selectbox("수급자 선택", patient_df['수급자명'].unique())
-        patient_info = patient_df[patient_df['수급자명'] == selected_patient].iloc[0]
-
-        # 환자 상태 카드
-        st.info(f"""
-        **{patient_info['수급자명']}** 님
-        - 🩸 질환: 당뇨({patient_info.get('당뇨병','X')}), 고혈압({patient_info.get('고혈압','X')})
-        - 🦷 연하: {patient_info.get('연하장애','없음')} ({patient_info['현재식사현황']})
-        """)
-
-        st.subheader("2. 가상 재고 설정")
-        # 데모를 위해 재고 상황을 랜덤으로 가정
-        all_ingredients = ingredient_df['Ingredient'].unique().tolist()
-        # 매번 바뀌는 재고 상황 시뮬레이션
-        if 'today_inventory' not in st.session_state:
-            st.session_state['today_inventory'] = random.sample(all_ingredients, 20)
-        
-        inventory_list = st.session_state['today_inventory']
-        st.write("📦 **오늘의 풍부한 식자재:**")
-        st.write(", ".join(inventory_list[:10]) + " 등...")
-        
-        if st.button("🎲 재고 상황 바꾸기"):
-            st.session_state['today_inventory'] = random.sample(all_ingredients, 20)
-            st.rerun()
-
-    with col2:
-        st.subheader("3. AI 식단 설계 결과")
-        
-        if st.button("🚀 LLM에게 식단 설계 지시하기", type="primary"):
-            if not api_key:
-                st.error("API 키가 필요합니다.")
-            else:
-                with st.spinner("AI 영양사가 환자 정보와 냉장고를 확인하고 있습니다..."):
-                    # 1. 후보 메뉴 리스트 준비 (DB에서 카테고리별로 분류)
-                    candidates = {}
-                    for cat in ['밥', '국', '주찬', '부찬', '김치']:
-                        candidates[cat] = category_df[category_df['Category'] == cat]['Menu'].unique().tolist()
-
-                    # 2. LLM 호출
-                    ai_result = generate_meal_plan_by_llm(api_key, patient_info, inventory_list, candidates)
-
-                    if ai_result:
-                        # 결과 출력
-                        st.success("식단 설계 완료!")
-                        
-                        # 1. AI의 생각 (Reasoning)
-                        st.markdown(f"### 💡 AI의 설계 의도\n> {ai_result['reasoning']}")
-                        
-                        # 2. 식단표 시각화
-                        menu_plan = ai_result['menu']
-                        
-                        # 영양 정보 매핑 (선택된 메뉴의 영양소 가져오기)
-                        total_kcal = 0
-                        total_na = 0
-                        
-                        plan_display = []
-                        for cat, menu_name in menu_plan.items():
-                            # 괄호(조리법) 제거하고 DB 매칭 시도
-                            clean_name = menu_name.split('(')[0].strip()
-                            
-                            # 영양소 찾기
-                            nutri = nutrient_df[nutrient_df['Menu'] == clean_name]
-                            kcal = nutri['에너지(kcal)'].values[0] if not nutri.empty else 0
-                            na = nutri['나트륨(mg)'].values[0] if not nutri.empty else 0
-                            
-                            total_kcal += kcal
-                            total_na += na
-                            
-                            plan_display.append({
-                                "구분": cat,
-                                "AI 추천 메뉴": menu_name, # 조리법 포함된 이름
-                                "칼로리(kcal)": round(kcal, 1),
-                                "나트륨(mg)": round(na, 1)
-                            })
-                            
-                        st.table(pd.DataFrame(plan_display))
-                        
-                        # 3. 영양 요약 차트
-                        st.markdown("#### 📊 영양 분석")
-                        col_a, col_b = st.columns(2)
-                        col_a.metric("총 칼로리", f"{int(total_kcal)} kcal")
-                        col_b.metric("총 나트륨", f"{int(total_na)} mg", 
-                                     delta="주의" if total_na > 2000 else "적정", 
-                                     delta_color="inverse")
-                        
+def generate_monthly_plan(master_menu_df, category_df, side_dish_db, preference):
+    """
+    1주일치 데이터를 4번 반복하여 4주(28일) 식단을 생성하되,
+    부찬만 선호도에 맞춰 교체합니다.
+    """
+    
+    # 1주일치 날짜 컬럼들
+    base_dates = master_menu_df.columns[1:] 
+    
+    monthly_plan = []
+    
+    # 4주 반복 (Week 1 ~ Week 4)
+    for week in range(4): 
+        for date_col in base_dates:
+            # 날짜 계산 (가상)
+            base_dt = datetime.datetime.strptime(date_col.split(' ')[0], "%Y-%m-%d")
+            new_date = base_dt + datetime.timedelta(weeks=week)
+            date_str = new_date.strftime("%Y-%m-%d (%a)")
+            
+            # 해당 날짜의 마스터 메뉴 가져오기 (결측치 제거)
+            daily_menus = master_menu_df[date_col].dropna().tolist()
+            
+            # 하루 식단 구성 (아침, 점심, 저녁 중 '조식' 6개만 예시로 사용)
+            # 실제 데이터에 따라 슬라이싱 조정 필요
+            daily_menus = daily_menus[:6] 
+            
+            day_plan = {
+                '날짜': date_str,
+                '밥': '', '국': '', '주찬': '', '김치': '', 
+                '부찬': [], '원래부찬': []
+            }
+            
+            for menu in daily_menus:
+                # 카테고리 확인
+                cat_row = category_df[category_df['Menu'] == menu]
+                if cat_row.empty: continue
+                cat = cat_row['Category'].values[0]
+                
+                if cat == '부찬':
+                    day_plan['원래부찬'].append(menu)
+                    
+                    # [핵심 로직] 선호도 반영 교체
+                    # 현재 부찬이 선호도 그룹에 속해있으면 유지, 아니면 교체
+                    if menu in side_dishes_by_type[preference]:
+                        day_plan['부찬'].append(menu) # 운 좋게 취향 일치 -> 유지
                     else:
-                        st.error("식단을 생성하지 못했습니다. 다시 시도해주세요.")
+                        # 취향에 맞는 다른 반찬 랜덤 추출 (재고/계절 고려 가능)
+                        substitute = random.choice(side_dishes_by_type[preference])
+                        day_plan['부찬'].append(f"{substitute} (🔄교체)")
+                        
+                elif cat in day_plan:
+                    day_plan[cat] = menu
+            
+            # 부찬 리스트를 문자열로 변환
+            day_plan['부찬'] = ", ".join(day_plan['부찬'])
+            day_plan['원래부찬'] = ", ".join(day_plan['원래부찬'])
+            
+            monthly_plan.append(day_plan)
+            
+    return pd.DataFrame(monthly_plan)
 
-if __name__ == "__main__":
-    main()
+# -------------------------------------------------------------------------
+# 4. 메인 UI
+# -------------------------------------------------------------------------
+st.set_page_config(layout="wide", page_title="모듈형 맞춤 식단 생성기")
+st.title("🗓️ 1개월치 모듈형 맞춤 식단 생성기")
+st.markdown("""
+- **공통:** 밥, 국, 주찬, 김치 (모두 동일)
+- **개인화:** **부찬(Side Dish)**만 선호도(육고기/해산물/채소)에 따라 자동 변경
+""")
+
+# 데이터 로드
+menu_df, category_df, patient_df = load_data()
+
+if menu_df is not None:
+    # 1. 부찬 DB 분류 실행
+    side_dishes_by_type = classify_side_dishes(category_df)
+
+    with st.sidebar:
+        st.header("👤 대상자 설정")
+        selected_patient = st.selectbox("수급자 선택", patient_df['수급자명'].unique())
+        
+        st.markdown("---")
+        st.header("❤️ 선호도 조사")
+        st.write("부찬(밑반찬)으로 어떤 종류를 선호하시나요?")
+        preference = st.radio(
+            "선호 식재료 선택",
+            ('육고기', '채소', '해산물'),
+            index=1
+        )
+        
+        st.info(f"선택하신 **[{preference}]** 위주로 한 달 식단을 구성합니다.")
+        
+        # 디버깅용: 분류된 메뉴 보여주기
+        with st.expander("분류된 부찬 DB 확인"):
+            st.write(side_dishes_by_type[preference])
+
+    # 2. 식단 생성
+    final_plan_df = generate_monthly_plan(menu_df, category_df, side_dishes_by_type, preference)
+
+    # 3. 결과 시각화
+    st.subheader(f"📅 {selected_patient}님을 위한 4주 맞춤 식단표")
+    
+    # 데이터프레임 스타일링 (변경된 부찬 강조)
+    def highlight_change(val):
+        color = '#e6fffa' if '🔄' in str(val) else ''
+        return f'background-color: {color}'
+
+    st.dataframe(
+        final_plan_df[['날짜', '밥', '국', '주찬', '김치', '부찬']],
+        use_container_width=True,
+        height=600,
+        column_config={
+            "날짜": st.column_config.TextColumn("날짜", width="medium"),
+            "부찬": st.column_config.TextColumn("부찬 (맞춤형)", width="large"),
+        }
+    )
+    
+    # 4. 통계 및 요약
+    st.markdown("---")
+    col1, col2 = st.columns(2)
+    with col1:
+        total_days = len(final_plan_df)
+        changed_cnt = final_plan_df['부찬'].str.contains('🔄').sum()
+        st.metric("식단 생성 기간", f"{total_days}일 (4주)")
+        
+    with col2:
+        st.metric("취향 반영 교체 횟수", f"{changed_cnt}회 / {total_days}끼")
+        st.caption("※ 원래 식단이 이미 취향과 맞으면 교체하지 않습니다.")
+
+    # 5. 엑셀 다운로드
+    import io
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+        final_plan_df.to_excel(writer, index=False)
+        
+    st.download_button(
+        label="📥 1개월 식단표 엑셀 다운로드",
+        data=buffer.getvalue(),
+        file_name=f"{selected_patient}_1개월_맞춤식단({preference}).xlsx",
+        mime="application/vnd.ms-excel"
+    )
