@@ -14,7 +14,7 @@ def load_data():
         category_df = pd.read_csv('category.csv')
         
         # 고령자 데이터 헤더 자동 찾기 로직
-        patient_file_name = 'senior.csv
+        patient_file_name = 'senior.csv'
         temp_df = pd.read_csv(patient_file_name, header=3)            
         menu_df.fillna(0, inplace=True)
         return menu_df, nutrient_df, category_df, patient_df
