@@ -16,7 +16,7 @@ def load_and_prep_data():
         ingredient_df = pd.read_csv('ingredient.csv')
         
         # 고령자 데이터 로드 (헤더 자동 찾기)
-        patient_file = ‘senior.csv'
+        patient_file = 'senior.csv'
         patient_df = pd.read_csv(patient_file, header=3)
         patient_df.columns = patient_df.columns.str.strip()
 
