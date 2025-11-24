@@ -11,7 +11,7 @@ import random
 def load_data():
     try:
         # 파일 로드
-       menu_df = pd.read_csv('menu.csv')
+        menu_df = pd.read_csv('menu.csv')
         nutrient_df = pd.read_csv('nutrient.csv')
         category_df = pd.read_csv('category.csv')
         ingredient_df = pd.read_csv('ingredient.csv')
